@@ -1,0 +1,131 @@
+OPEN_ROUTER_API_KEY = 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
+
+Project Overview
+
+We need to build a custom email validation API that achieves at least 99% accuracy. The service should be production-grade—comparable to providers like Mailgun or Twilio—but built entirely in-house using Node.js. It must use a multi-layered approach (syntax validation, DNS/MX checks, disposable email detection, and optional SMTP heuristics) to verify email addresses without relying on third-party APIs.
+
+Technical Requirements
+
+Language & Framework:
+
+Use Node.js with Express as the primary framework.
+Follow modern JavaScript practices (ES6+).
+Validation Layers:
+
+Syntax Validation:
+Implement robust, RFC 5322-compliant regex logic (or helper module) to validate email format.
+DNS & MX Record Verification:
+Use Node’s native dns module (with promises) to perform DNS lookups and verify MX records for the email domain. Optionally, check for A records if no MX records are found.
+Disposable/Role-Based Email Detection:
+Maintain a curated list of disposable and role-based domains (stored in a local file or module) and flag these emails.
+SMTP Verification (Optional):
+Develop an optional, low-impact SMTP check using Node’s net module. The check should issue minimal commands (EHLO, MAIL FROM) without completing the full handshake to avoid being flagged.
+Heuristic & Typo Correction:
+Incorporate common typo detection (e.g., “gamil.com” for “gmail.com”) and offer suggestions.
+User Confirmation (Optional):
+Design the system so that an email verification token can be sent to the user. Mark the email as “fully validated” only when the user confirms it.
+Security & Performance:
+
+Use rate limiting (via middleware like express-rate-limit) to prevent abuse.
+Validate all incoming input thoroughly to mitigate injection attacks.
+Cache DNS/MX lookup results where possible to improve performance.
+Use environment variables (via a package like dotenv) for configuration and secret management.
+Error Handling & Logging:
+
+Implement centralized error handling middleware.
+Set up professional logging (e.g., using Winston) to record API usage and errors.
+Testing:
+
+Develop a comprehensive suite of unit and integration tests using Jest or Mocha.
+Ensure tests cover a wide range of email scenarios (valid, invalid, edge cases).
+Documentation:
+
+Generate clear API documentation (e.g., using Swagger or similar tools) to detail endpoints, request/response formats, and error codes.
+Proposed Project Structure
+
+Create a modular project structure to separate concerns and ensure maintainability:
+
+arduino
+Copy
+Edit
+email-validator-api/
+├── config/
+│   └── config.js          // General configuration (port, env vars, etc.)
+├── controllers/
+│   └── emailController.js // Handles API requests/responses
+├── middlewares/
+│   ├── errorHandler.js    // Global error handling middleware
+│   └── rateLimiter.js     // Rate limiting middleware
+├── routes/
+│   └── emailRoutes.js     // Defines API endpoints and routes
+├── services/
+│   ├── emailValidator.js  // Core logic: syntax, DNS/MX, heuristic validation
+│   └── smtpChecker.js     // (Optional) SMTP verification using Node's net module
+├── utils/
+│   ├── regexValidator.js  // Contains RFC-compliant regex and related helper functions
+│   └── disposableDomains.js // Curated list of disposable/role-based domains
+├── tests/
+│   └── emailValidator.test.js // Automated tests for all validation layers
+├── .env                   // Environment variables
+├── package.json
+└── server.js              // Entry point for the Express server
+Detailed Task Breakdown
+
+Server Initialization (server.js):
+
+Load environment variables.
+Set up Express with JSON parsing.
+Configure API versioning (e.g., /api/v1/email).
+Attach routes and global error handler.
+Listen on the defined port.
+API Routes (routes/emailRoutes.js):
+
+Define a POST endpoint /validate that accepts a JSON payload with an email field.
+Ensure routes are modular to allow future expansion (e.g., health checks, token confirmation endpoints).
+Controller Logic (controllers/emailController.js):
+
+Validate incoming request payloads.
+Delegate email validation to the service layer.
+Return structured JSON responses (success status, detailed validation messages, and additional data such as MX records).
+Core Validation Service (services/emailValidator.js):
+
+Implement syntax validation using a robust regex.
+Use the DNS module to perform MX record lookups and handle errors gracefully.
+Check the email domain against the curated list of disposable/role-based domains.
+Optionally call the SMTP verification service.
+Return a unified result structure with flags for each validation step.
+Optional SMTP Checker (services/smtpChecker.js):
+
+If implemented, use Node’s net module to connect to the email server.
+Send minimal SMTP commands and interpret responses without completing a full handshake.
+Return heuristic results without risking IP blacklisting.
+Utility Modules (utils/regexValidator.js & disposableDomains.js):
+
+In regexValidator.js, store and export a robust regular expression for email validation.
+In disposableDomains.js, export an array of disposable and role-based email domains. Ensure this list is easy to update.
+Middleware (middlewares/errorHandler.js & rateLimiter.js):
+
+Global error handler to catch and log errors, then return a consistent error response.
+Rate limiting middleware to throttle requests and secure the API.
+Testing (tests/emailValidator.test.js):
+
+Write tests to cover all validation layers:
+Valid emails
+Invalid syntax
+Domains with no MX records
+Emails from disposable domains
+Edge cases and common typos
+Ensure both unit and integration tests are in place to verify the overall system functionality.
+Documentation & Deployment:
+
+Create API documentation detailing each endpoint, input requirements, response formats, and error handling.
+Prepare deployment scripts and ensure the configuration is production-ready with proper environment variables and logging.
+Final Deliverable
+
+A fully functional, production-ready email validation API system built in Node.js that:
+
+Implements multiple validation layers (syntax, DNS/MX, disposable email detection, optional SMTP checks).
+Is organized into a modular structure with clear separation of concerns.
+Includes security features such as rate limiting and proper error handling.
+Provides extensive unit and integration test coverage.
+Offers comprehensive API documentation for external developers.
