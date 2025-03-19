@@ -4,11 +4,13 @@ const bodyParser = require('body-parser');
 const rateLimiter = require('./middlewares/rateLimiter');
 const errorHandler = require('./middlewares/errorHandler');
 const emailRoutes = require('./routes/emailRoutes');
+const cors = require('cors');
 
 dotenv.config();
 
 const app = express();
 app.use(bodyParser.json());
+app.use(cors());
 app.use(rateLimiter);
 app.use('/api', emailRoutes);
 app.use(errorHandler);
