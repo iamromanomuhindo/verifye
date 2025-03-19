@@ -9,15 +9,22 @@ const getDomainFromEmail = (email) => {
   return atIndex === -1 ? '' : email.slice(atIndex + 1).toLowerCase();
 };
 
-const validateSyntax = (email) => ({
-  valid: emailRegex.test(email),
-  message: 'Invalid email format'
-});
+const validateSyntax = (email) => {
+  const valid = emailRegex.test(email);
+  return {
+    valid,
+    message: valid ? '' : 'Invalid email format'
+  };
+};
 
 const checkMXRecords = async (domain) => {
   try {
     const records = await dns.resolveMx(domain);
-    return { valid: records.length > 0, message: 'No MX records found' };
+    const valid = records.length > 0;
+    return {
+      valid,
+      message: valid ? '' : 'No MX records found'
+    };
   } catch (error) {
     return { valid: false, message: 'DNS resolution failed' };
   }
