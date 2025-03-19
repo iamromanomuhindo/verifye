@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <form id="emailForm">
+    Email: <input type="email" id="emailInput">
+    <button type="button" onclick="testApi()">Test</button>
+  </form>
+  <pre id="response"></pre>
+
+  <script>
+    function testApi() {
+      const email = document.getElementById('emailInput').value;
+      fetch('https://email-validation-tool-26pr.onrender.com/api/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      })
+      .then(response => response.json())
+      .then(data => document.getElementById('response').textContent = JSON.stringify(data, null, 2))
+      .catch(error => console.error(error));
+    }
+  </script>
+</body>
+</html>
