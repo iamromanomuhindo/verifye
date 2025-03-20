@@ -2,13 +2,9 @@ const dns = require('dns').promises;
 const { emailRegex } = require('../utils/regexValidator');
 const disposableDomains = require('../utils/disposableDomains');
 const { checkEmailExistence } = require('./smtpChecker');
+const { getDomainFromEmail } = require('../utils/emailUtils');
 
 const isDisposableDomain = (domain) => disposableDomains.includes(domain);
-
-const getDomainFromEmail = (email) => {
-  const atIndex = email.lastIndexOf('@');
-  return atIndex === -1 ? '' : email.slice(atIndex + 1).toLowerCase();
-};
 
 const validateSyntax = (email) => {
   const valid = emailRegex.test(email);
