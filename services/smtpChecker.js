@@ -40,22 +40,24 @@ const BLOCK_PATTERNS = [
 ];
 
 class SmartSMTPChecker {
-  constructor(domain, options = {}) {
-    this.domain = domain;
+  constructor(options = {}) {
     this.options = {
       timeout: options.timeout || 5000,
       port: options.port || 25,
       maxRetries: options.maxRetries || 2,
       retryDelay: options.retryDelay || 1000,
+      // SMTP server configurations - will be populated later
+      servers: options.servers || [],
+      currentServerIndex: 0,
       // Use different sender domains to avoid pattern detection
-      senderDomains: [
+      senderDomains: options.senderDomains || [
         'outlook.com',
         'yahoo.com',
         'aol.com',
         'hotmail.com'
       ],
       // Rotate user agents to look more like a mail client
-      userAgents: [
+      userAgents: options.userAgents || [
         'Mozilla/5.0 Thunderbird',
         'Microsoft Outlook',
         'Apple Mail',
@@ -63,13 +65,26 @@ class SmartSMTPChecker {
       ]
     };
     this.socket = null;
+    this.currentServer = null;
   }
 
-  async connect(host) {
+  rotateServer() {
+    if (this.options.servers.length === 0) {
+      throw new Error('No SMTP servers configured');
+    }
+    this.options.currentServerIndex = (this.options.currentServerIndex + 1) % this.options.servers.length;
+    this.currentServer = this.options.servers[this.options.currentServerIndex];
+    logger.info(`Rotating to SMTP server: ${this.currentServer.host}`);
+  }
+
+  async connect() {
+    if (!this.currentServer) {
+      this.rotateServer();
+    }
+
     return new Promise((resolve, reject) => {
       this.socket = new net.Socket();
       
-      // Set a shorter timeout for initial connection
       this.socket.setTimeout(this.options.timeout);
 
       this.socket.on('timeout', () => {
@@ -81,7 +96,16 @@ class SmartSMTPChecker {
         reject(err);
       });
 
-      this.socket.connect(this.options.port, host, () => {
+      const { host, port = this.options.port, sourceIp } = this.currentServer;
+
+      const connectionOptions = {
+        port,
+        host,
+        localAddress: sourceIp // Use specific IP if provided
+      };
+
+      this.socket.connect(connectionOptions, () => {
+        logger.info(`Connected to SMTP server ${host} from IP ${sourceIp || 'default'}`);
         resolve();
       });
     });
@@ -95,15 +119,18 @@ class SmartSMTPChecker {
       const responseHandler = (data) => {
         response += data.toString();
         
-        // Handle multiline responses (begin with XXX-)
+        // Handle multiline responses
         if (expectMultiline) {
           if (response.match(/^\d{3}-[\s\S]*\r\n\d{3} /)) {
             responseComplete = true;
           }
-        } else if (response.includes('\r\n')) {
-          responseComplete = true;
+        } else {
+          // Single line response
+          if (response.match(/^\d{3} /)) {
+            responseComplete = true;
+          }
         }
-
+        
         if (responseComplete) {
           this.socket.removeListener('data', responseHandler);
           resolve(response.trim());
@@ -112,135 +139,119 @@ class SmartSMTPChecker {
 
       this.socket.on('data', responseHandler);
       
-      if (cmd) {
-        this.socket.write(cmd + '\r\n');
-      }
+      this.socket.write(cmd + '\r\n');
+      
+      // Set timeout for response
+      setTimeout(() => {
+        if (!responseComplete) {
+          this.socket.removeListener('data', responseHandler);
+          reject(new Error('Response timeout'));
+        }
+      }, this.options.timeout);
     });
   }
 
-  getRandomItem(array) {
-    return array[Math.floor(Math.random() * array.length)];
-  }
-
-  async checkEmail(email) {
-    const mxRecords = await dns.resolveMx(this.domain);
-    if (!mxRecords || mxRecords.length === 0) {
-      return { valid: false, reason: 'No MX records' };
-    }
-
-    // Sort MX records by priority
-    const sortedMx = mxRecords.sort((a, b) => a.priority - b.priority);
-    
-    for (const mx of sortedMx) {
-      try {
-        // Connect to the mail server
-        await this.connect(mx.exchange);
-        
-        // Get initial greeting
-        const greeting = await this.sendCommand('');
-        if (this.isBlocked(greeting)) {
-          this.socket.destroy();
-          continue;
-        }
-
-        // Send EHLO instead of HELO and capture capabilities
-        const senderDomain = this.getRandomItem(this.options.senderDomains);
-        const ehloResponse = await this.sendCommand(`EHLO ${senderDomain}`, true);
-        if (this.isBlocked(ehloResponse)) {
-          this.socket.destroy();
-          continue;
-        }
-
-        // Add random delays between commands to appear more natural
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
-
-        // Send MAIL FROM with a legitimate-looking address
-        const randomUser = Math.random().toString(36).substring(7);
-        const fromCmd = `MAIL FROM:<${randomUser}@${senderDomain}>`;
-        const fromResponse = await this.sendCommand(fromCmd);
-        if (this.isBlocked(fromResponse)) {
-          this.socket.destroy();
-          continue;
-        }
-
-        // Add another random delay
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
-
-        // Send RCPT TO
-        const rcptCmd = `RCPT TO:<${email}>`;
-        const rcptResponse = await this.sendCommand(rcptCmd);
-        
-        // Clean up
-        await this.sendCommand('QUIT');
-        this.socket.destroy();
-
-        // Analyze the response
-        if (this.isBlocked(rcptResponse)) {
-          return { 
-            valid: null, 
-            reason: 'Server blocked validation attempt',
-            response: rcptResponse
-          };
-        }
-
-        if (this.indicatesExistence(rcptResponse)) {
-          return { 
-            valid: true, 
-            reason: 'Server indicates email exists',
-            response: rcptResponse
-          };
-        }
-
-        if (this.indicatesNonexistence(rcptResponse)) {
-          return { 
-            valid: false, 
-            reason: 'Server indicates email does not exist',
-            response: rcptResponse
-          };
-        }
-
-        return {
-          valid: null,
-          reason: 'Server response unclear',
-          response: rcptResponse
-        };
-
-      } catch (error) {
-        logger.error(`SMTP error with ${mx.exchange}:`, error);
-        if (this.socket) {
-          this.socket.destroy();
-        }
-        continue;
+  async verifyEmail(email, retryCount = 0) {
+    try {
+      // Extract domain from email
+      const [, domain] = email.split('@');
+      
+      // Get MX records
+      const mxRecords = await dns.resolveMx(domain);
+      if (!mxRecords || mxRecords.length === 0) {
+        return { exists: false, reason: 'No MX records' };
       }
+
+      // Sort MX records by priority
+      mxRecords.sort((a, b) => a.priority - b.priority);
+      const mxHost = mxRecords[0].exchange;
+
+      // Connect to SMTP server
+      await this.connect();
+
+      // Initial greeting
+      const greeting = await this.sendCommand('');
+      if (!greeting.startsWith('220')) {
+        throw new Error('Invalid greeting: ' + greeting);
+      }
+
+      // HELO command
+      const randomDomain = this.options.senderDomains[Math.floor(Math.random() * this.options.senderDomains.length)];
+      const helo = await this.sendCommand(`HELO ${randomDomain}`);
+      if (!helo.startsWith('250')) {
+        throw new Error('HELO failed: ' + helo);
+      }
+
+      // MAIL FROM command
+      const from = `verify@${randomDomain}`;
+      const mailFrom = await this.sendCommand(`MAIL FROM:<${from}>`);
+      if (!mailFrom.startsWith('250')) {
+        throw new Error('MAIL FROM failed: ' + mailFrom);
+      }
+
+      // RCPT TO command
+      const rcptTo = await this.sendCommand(`RCPT TO:<${email}>`);
+      
+      // Clean up
+      await this.sendCommand('QUIT');
+      this.socket.destroy();
+
+      // Analyze response
+      if (BLOCK_PATTERNS.some(pattern => pattern.test(rcptTo))) {
+        if (retryCount < this.options.maxRetries) {
+          logger.warn(`Blocked by server, retrying with different IP... (${retryCount + 1}/${this.options.maxRetries})`);
+          this.rotateServer();
+          return await this.verifyEmail(email, retryCount + 1);
+        }
+        return { exists: null, reason: 'Blocked by server' };
+      }
+
+      if (EXISTENCE_PATTERNS.some(pattern => pattern.test(rcptTo))) {
+        return { exists: true, reason: rcptTo };
+      }
+
+      if (NONEXISTENCE_PATTERNS.some(pattern => pattern.test(rcptTo))) {
+        return { exists: false, reason: rcptTo };
+      }
+
+      return { exists: null, reason: 'Ambiguous response: ' + rcptTo };
+
+    } catch (error) {
+      logger.error(`Error verifying email ${email}: ${error.message}`);
+      
+      if (retryCount < this.options.maxRetries) {
+        logger.info(`Retrying with different server... (${retryCount + 1}/${this.options.maxRetries})`);
+        this.rotateServer();
+        return await this.verifyEmail(email, retryCount + 1);
+      }
+
+      return { exists: null, reason: error.message };
     }
-
-    return {
-      valid: null,
-      reason: 'Unable to verify with any mail server',
-      servers: sortedMx.map(mx => mx.exchange)
-    };
-  }
-
-  isBlocked(response) {
-    return BLOCK_PATTERNS.some(pattern => pattern.test(response));
-  }
-
-  indicatesExistence(response) {
-    return EXISTENCE_PATTERNS.some(pattern => pattern.test(response));
-  }
-
-  indicatesNonexistence(response) {
-    return NONEXISTENCE_PATTERNS.some(pattern => pattern.test(response));
   }
 }
 
+// Example server configuration format:
+const serverConfig = {
+  servers: [
+    {
+      host: 'smtp1.example.com',
+      port: 25,
+      sourceIp: '192.168.1.10'
+    },
+    {
+      host: 'smtp2.example.com',
+      port: 25,
+      sourceIp: '192.168.1.11'
+    }
+  ]
+};
+
 const checkEmailExistence = async (email, timeout = 5000) => {
   try {
-    const [localPart, domain] = email.split('@');
-    const checker = new SmartSMTPChecker(domain, { timeout });
-    const result = await checker.checkEmail(email);
+    const checker = new SmartSMTPChecker({ timeout, ...serverConfig });
+    const result = await checker.verifyEmail(email);
 
-    if (result.valid === true) {
+    if (result.exists === true) {
       return {
         valid: true,
         message: 'Email address exists',
@@ -249,7 +260,7 @@ const checkEmailExistence = async (email, timeout = 5000) => {
           response: result.response
         }
       };
-    } else if (result.valid === false) {
+    } else if (result.exists === false) {
       return {
         valid: false,
         message: 'Email address does not exist',
